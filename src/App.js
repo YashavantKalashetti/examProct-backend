@@ -3,7 +3,6 @@ import Peer from "simple-peer";
 import io from "socket.io-client";
 import * as tf from '@tensorflow/tfjs';
 import * as blazeface from '@tensorflow-models/blazeface';
-import 'process/browser';
 import { 
   AppBar,
   Box,
