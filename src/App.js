@@ -10,6 +10,7 @@ import {
   Card,
   CardContent,
   Container,
+  Divider,
   Grid,
   IconButton,
   List,
@@ -27,24 +28,8 @@ import {
   ContentCopy as ContentCopyIcon,
   CallEnd as CallEndIcon,
   Phone as PhoneIcon,
-  Warning as WarningIcon,
+  Warning as WarningIcon
 } from '@mui/icons-material';
-
-import { AlertTitle } from '@mui/material';
-import ErrorIcon from '@mui/icons-material/Error';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import InfoIcon from '@mui/icons-material/Info';
-import GavelIcon from '@mui/icons-material/Gavel';
-
-
-const MONITORING_CONFIG = {
-  FACE_DETECTION_INTERVAL: 2000,
-  AUDIO_CHECK_INTERVAL: 500,
-  NOISE_THRESHOLD: 24,
-  NO_FACE_THRESHOLD: 3,
-  MULTI_FACE_THRESHOLD: 2,
-  WARNING_LIMIT: 10
-};
 
 const socket = io.connect("https://exam-backend-demo.onrender.com", {
   cors: {
@@ -56,7 +41,7 @@ const socket = io.connect("https://exam-backend-demo.onrender.com", {
 });
 
 function App() {
-  // States remain the same
+  // Existing states remain the same
   const [me, setMe] = useState("");
   const [stream, setStream] = useState(null);
   const [receivingCall, setReceivingCall] = useState(false);
@@ -73,79 +58,29 @@ function App() {
   const [isTabActive, setIsTabActive] = useState(true);
   const [isLoudNoise, setIsLoudNoise] = useState(false);
   const [showSnackbar, setShowSnackbar] = useState(false);
-  const [warningCount, setWarningCount] = useState(0);
-  const [malpracticeDetected, setMalpracticeDetected] = useState(false);
 
-  // Refs remain the same
+  // Refs
   const myVideo = useRef();
   const userVideo = useRef();
   const connectionRef = useRef();
   const canvasRef = useRef();
   const logsEndRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const audioAnalyserRef = useRef(null);
 
-  // Updated logging function
-  const addLog = (message, type = 'info') => {
-    setLogs(prevLogs => [...prevLogs, {
-      message,
-      timestamp: new Date().toLocaleTimeString(),
-      type
-    }]);
-
-    // Update warning count and check for malpractice
-    if (type === 'warning') {
-      setWarningCount((prevWarningCount) => {
-        const newWarningCount = prevWarningCount + 1;
-        console.log('Warning count:', newWarningCount);
-  
-        // Check for malpractice
-        if (newWarningCount >= 10 && !malpracticeDetected) {
-          setMalpracticeDetected(true);
-          leaveCall();
-        }
-  
-        return newWarningCount; // Update the state with the new count
-      });
+  // Auto-scroll logs
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  };
+  }, [logs]);
 
-  const getLogIcon = (type) => {
-    switch (type) {
-      case 'warning':
-        return <WarningIcon sx={{ color: '#ff9800' }}/>;
-      case 'error':
-        return <ErrorIcon sx={{ color: '#f44336' }}/>;
-      case 'success':
-        return <CheckCircleIcon sx={{ color: '#4caf50' }}/>;
-      default:
-        return <InfoIcon sx={{ color: '#2196f3' }}/>;
-    }
-  };
-
-  // Face detection function
-  const detectFaces = async () => {
-    if (!model || !myVideo.current) return;
-
-    try {
-      const predictions = await model.estimateFaces(myVideo.current, false);
-
-      if (predictions.length === 0) {
-        setNoFaceCount(prev => prev + 1);
-        addLog('No face detected', "warning");
-        setBorderColor('red');
-      } else if (predictions.length > 1) {
-        setMultiFaceCount(prev => prev + 1);
-        addLog('Multiple faces detected', "warning");
-        setBorderColor('red');
-      } else {
-        setBorderColor('#4caf50');
-      }
-    } catch (error) {
-      console.error('Face detection error:', error);
-      addLog('Face detection error occurred', "error");
-    }
-  };
+  useEffect(() => {
+    const loadModel = async () => {
+      const loadedModel = await blazeface.load();
+      setModel(loadedModel);
+      console.log('BlazeFace model loaded');
+    };
+    loadModel();
+  }, []);
 
   // Initialize video and socket connections
   useEffect(() => {
@@ -160,29 +95,31 @@ function App() {
       setCaller(from);
       setCallerSignal(signal);
     });
-
-    // Load face detection model
-    const loadModel = async () => {
-      const loadedModel = await blazeface.load();
-      setModel(loadedModel);
-    };
-    loadModel();
   }, []);
 
-  // Run face detection periodically
+  // Monitor tab visibility
   useEffect(() => {
-    const interval = setInterval(detectFaces, 2000);
-    return () => clearInterval(interval);
-  }, [model]);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setIsTabActive(true);
+      } else {
+        setIsTabActive(false);
+        setLogs(prevLogs => [...prevLogs, `Tab switched at ${new Date().toLocaleTimeString()}`]);
+        setBorderColor('red');
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   // Detect loud noises
   useEffect(() => {
     const startAudioDetection = async () => {
       try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const audioContext = new AudioContext();
         const analyser = audioContext.createAnalyser();
-        const microphone = audioContext.createMediaStreamSource(audioStream);
+        const microphone = audioContext.createMediaStreamSource(stream);
         microphone.connect(analyser);
         analyser.fftSize = 512;
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -194,7 +131,7 @@ function App() {
           const volume = dataArray.reduce((a, b) => a + b) / dataArray.length;
 
           if (volume > 24 && !noiseDetectionTimeout) {
-            addLog('Loud noise detected', "warning");
+            setLogs(prevLogs => [...prevLogs, `Loud noise detected at ${new Date().toLocaleTimeString()}`]);
             setIsLoudNoise(true);
             setBorderColor('red');
 
@@ -211,62 +148,86 @@ function App() {
         return () => clearInterval(interval);
       } catch (error) {
         console.error('Error accessing microphone:', error);
-        addLog('Error accessing microphone', "error");
       }
     };
     startAudioDetection();
   }, []);
 
-  // Call functions
+  // Face detection function
+  const detectFaces = async () => {
+    if (!model || !myVideo.current) return;
+
+    const video = myVideo.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+
+    const predictions = await model.estimateFaces(video, false);
+
+    if (predictions.length === 0) {
+      setNoFaceCount(prev => prev + 1);
+      setLogs(prevLogs => [...prevLogs, `No face detected at ${new Date().toLocaleTimeString()}`]);
+      setBorderColor('red');
+    } else if (predictions.length > 1) {
+      setMultiFaceCount(prev => prev + 1);
+      setLogs(prevLogs => [...prevLogs, `Multiple faces detected at ${new Date().toLocaleTimeString()}`]);
+      setBorderColor('red');
+    } else {
+      setBorderColor('green');
+    }
+  };
+
+  // Run face detection periodically
+  useEffect(() => {
+    const interval = setInterval(detectFaces, 2000);
+    return () => clearInterval(interval);
+  }, [model, isTabActive, isLoudNoise]);
+
+  // Video call functions
   const callUser = (id) => {
     const peer = new Peer({ initiator: true, trickle: false, stream });
-
     peer.on("signal", (data) => {
       socket.emit("callUser", { userToCall: id, signalData: data, from: me });
     });
-
     peer.on("stream", (currentStream) => {
-      userVideo.current.srcObject = currentStream;
+      if (userVideo.current) userVideo.current.srcObject = currentStream;
     });
-
     socket.on("callAccepted", (signal) => {
       setCallAccepted(true);
       peer.signal(signal);
     });
-
     connectionRef.current = peer;
   };
 
   const answerCall = () => {
     setCallAccepted(true);
     const peer = new Peer({ initiator: false, trickle: false, stream });
-    
-    peer.on("signal", (data) => {
-      socket.emit("answerCall", { signal: data, to: caller });
-    });
-
+    peer.on("signal", (data) => socket.emit("answerCall", { signal: data, to: caller }));
     peer.on("stream", (currentStream) => {
-      userVideo.current.srcObject = currentStream;
+      if (userVideo.current) userVideo.current.srcObject = currentStream;
     });
-
     peer.signal(callerSignal);
     connectionRef.current = peer;
   };
 
   const leaveCall = () => {
     setCallEnded(true);
-    connectionRef.current.destroy();
-    addLog('Call ended', "success");
+    connectionRef.current?.destroy();
   };
 
-  // UI helpers
   const copyToClipboard = () => {
     navigator.clipboard.writeText(me);
     setShowSnackbar(true);
   };
 
   const handleCloseSnackbar = (event, reason) => {
-    if (reason === 'clickaway') return;
+    if (reason === 'clickaway') {
+      return;
+    }
     setShowSnackbar(false);
   };
 
@@ -469,17 +430,9 @@ function App() {
                     flexDirection: 'column'
                   }}
                 >
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
-                    <Typography variant="h6">
-                      Activity Logs
-                    </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <WarningIcon sx={{ color: '#ff9800' }}/>
-                      <Typography>
-                        Warnings: {warningCount}/{10}
-                      </Typography>
-                    </Box>
-                  </Stack>
+                  <Typography variant="h6" gutterBottom>
+                    Activity Logs
+                  </Typography>
                   <List 
                     sx={{ 
                       overflow: 'auto',
@@ -488,30 +441,18 @@ function App() {
                       borderRadius: 1,
                       '& .warning': {
                         bgcolor: '#fff3e0'
-                      },
-                      '& .error': {
-                        bgcolor: '#ffebee'
-                      },
-                      '& .success': {
-                        bgcolor: '#e8f5e9'
-                      },
-                      '& .info': {
-                        bgcolor: '#fff'
                       }
                     }}
                   >
                     {logs.map((log, index) => (
                       <ListItem 
                         key={index}
-                        className={log.type}
+                        className={log.includes('detected') ? 'warning' : ''}
                         divider
                       >
-                        <Box sx={{ mr: 2 }}>
-                          {getLogIcon(log.type)}
-                        </Box>
                         <ListItemText 
-                          primary={log.message}
-                          secondary={log.timestamp}
+                          primary={log}
+                          secondary={new Date().toLocaleTimeString()}
                         />
                       </ListItem>
                     ))}
@@ -554,26 +495,6 @@ function App() {
           </Alert>
         </Snackbar>
       )}
-
-    <Snackbar
-        open={malpracticeDetected}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-        sx={{ width: '100%' }}
-      >
-        <Alert 
-          severity="error"
-          icon={<GavelIcon />}
-          sx={{ 
-            width: '100%',
-            '& .MuiAlert-message': {
-              fontSize: '1.1rem'
-            }
-          }}
-        >
-          <AlertTitle>Malpractice Detected</AlertTitle>
-          You have been caught in malpractice. The examination has been terminated due to multiple warnings.
-        </Alert>
-      </Snackbar>
 
       <canvas ref={canvasRef} style={{ display: 'none' }} />
     </Box>
