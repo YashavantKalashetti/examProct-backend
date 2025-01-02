@@ -10,7 +10,6 @@ import {
   Card,
   CardContent,
   Container,
-  Divider,
   Grid,
   IconButton,
   List,
@@ -22,13 +21,15 @@ import {
   Toolbar,
   Typography,
   Alert,
-  Stack
+  Stack,
+  Divider
 } from '@mui/material';
 import {
   ContentCopy as ContentCopyIcon,
   CallEnd as CallEndIcon,
   Phone as PhoneIcon,
-  Warning as WarningIcon
+  Warning as WarningIcon,
+  Error as ErrorIcon
 } from '@mui/icons-material';
 
 const socket = io.connect("https://exam-backend-demo.onrender.com", {
@@ -41,7 +42,6 @@ const socket = io.connect("https://exam-backend-demo.onrender.com", {
 });
 
 function App() {
-  // Existing states remain the same
   const [me, setMe] = useState("");
   const [stream, setStream] = useState(null);
   const [receivingCall, setReceivingCall] = useState(false);
@@ -58,33 +58,62 @@ function App() {
   const [isTabActive, setIsTabActive] = useState(true);
   const [isLoudNoise, setIsLoudNoise] = useState(false);
   const [showSnackbar, setShowSnackbar] = useState(false);
+  const [isMobileRole, setIsMobileRole] = useState(false);
+  const [isMonitoring, setIsMonitoring] = useState(false);
+  const [violationCount, setViolationCount] = useState(0);
+  const [examTerminated, setExamTerminated] = useState(false);
 
-  // Refs
   const myVideo = useRef();
   const userVideo = useRef();
   const connectionRef = useRef();
   const canvasRef = useRef();
   const logsEndRef = useRef(null);
 
-  // Auto-scroll logs
-  useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  const addLog = (message) => {
+    if (isMonitoring) {
+      setLogs(prevLogs => {
+        const newLogs = [...prevLogs, message];
+        if (message.includes('detected') || message.includes('switched')) {
+          setViolationCount(prev => {
+            const newCount = prev + 1;
+            if (newCount >= 10) {
+              setExamTerminated(true);
+              setCallEnded(true);
+            }
+            return newCount;
+          });
+        }
+        return newLogs;
+      });
     }
-  }, [logs]);
+  };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setIsMobileRole(params.get('role') === 'mobile');
+  }, []);
+
+  useEffect(() => {
+    if (callAccepted && !callEnded) {
+      setIsMonitoring(true);
+    } else {
+      setIsMonitoring(false);
+    }
+  }, [callAccepted, callEnded]);
 
   useEffect(() => {
     const loadModel = async () => {
       const loadedModel = await blazeface.load();
       setModel(loadedModel);
-      console.log('BlazeFace model loaded');
     };
     loadModel();
   }, []);
 
-  // Initialize video and socket connections
   useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then((currentStream) => {
+    navigator.mediaDevices.getUserMedia({ 
+      video: true, 
+      audio: !isMobileRole 
+    }).then((currentStream) => {
       setStream(currentStream);
       if (myVideo.current) myVideo.current.srcObject = currentStream;
     });
@@ -95,25 +124,25 @@ function App() {
       setCaller(from);
       setCallerSignal(signal);
     });
-  }, []);
+  }, [isMobileRole]);
 
-  // Monitor tab visibility
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         setIsTabActive(true);
       } else {
         setIsTabActive(false);
-        setLogs(prevLogs => [...prevLogs, `Tab switched at ${new Date().toLocaleTimeString()}`]);
+        addLog(`Tab switched at ${new Date().toLocaleTimeString()}`);
         setBorderColor('red');
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+  }, [isMonitoring]);
 
-  // Detect loud noises
   useEffect(() => {
+    if (!isMonitoring) return;
+
     const startAudioDetection = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -130,8 +159,8 @@ function App() {
           analyser.getByteFrequencyData(dataArray);
           const volume = dataArray.reduce((a, b) => a + b) / dataArray.length;
 
-          if (volume > 24 && !noiseDetectionTimeout) {
-            setLogs(prevLogs => [...prevLogs, `Loud noise detected at ${new Date().toLocaleTimeString()}`]);
+          if (volume > 26 && !noiseDetectionTimeout) {
+            addLog(`Loud noise detected at ${new Date().toLocaleTimeString()}`);
             setIsLoudNoise(true);
             setBorderColor('red');
 
@@ -150,12 +179,14 @@ function App() {
         console.error('Error accessing microphone:', error);
       }
     };
-    startAudioDetection();
-  }, []);
+    
+    if (!isMobileRole) {
+      startAudioDetection();
+    }
+  }, [isMonitoring, isMobileRole]);
 
-  // Face detection function
   const detectFaces = async () => {
-    if (!model || !myVideo.current) return;
+    if (!model || !myVideo.current || !isMonitoring) return;
 
     const video = myVideo.current;
     const canvas = canvasRef.current;
@@ -163,31 +194,29 @@ function App() {
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+    ctx.clearRect(0, 0, 30, 30);
+    ctx.drawImage(video, 0, 0, 30, 30);
 
     const predictions = await model.estimateFaces(video, false);
 
     if (predictions.length === 0) {
       setNoFaceCount(prev => prev + 1);
-      setLogs(prevLogs => [...prevLogs, `No face detected at ${new Date().toLocaleTimeString()}`]);
+      addLog(`No face detected at ${new Date().toLocaleTimeString()}`);
       setBorderColor('red');
     } else if (predictions.length > 1) {
       setMultiFaceCount(prev => prev + 1);
-      setLogs(prevLogs => [...prevLogs, `Multiple faces detected at ${new Date().toLocaleTimeString()}`]);
+      addLog(`Multiple faces detected at ${new Date().toLocaleTimeString()}`);
       setBorderColor('red');
     } else {
       setBorderColor('green');
     }
   };
 
-  // Run face detection periodically
   useEffect(() => {
     const interval = setInterval(detectFaces, 2000);
     return () => clearInterval(interval);
-  }, [model, isTabActive, isLoudNoise]);
+  }, [model, isTabActive, isLoudNoise, isMonitoring]);
 
-  // Video call functions
   const callUser = (id) => {
     const peer = new Peer({ initiator: true, trickle: false, stream });
     peer.on("signal", (data) => {
@@ -219,17 +248,75 @@ function App() {
     connectionRef.current?.destroy();
   };
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(me);
-    setShowSnackbar(true);
-  };
-
   const handleCloseSnackbar = (event, reason) => {
     if (reason === 'clickaway') {
       return;
     }
     setShowSnackbar(false);
   };
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(me);
+    setShowSnackbar(true);
+  };
+
+  if (examTerminated) {
+    return (
+      <Box sx={{ flexGrow: 1, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
+        <AppBar position="static" sx={{ mb: 3 }}>
+          <Toolbar>
+            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+              Exam Monitoring System
+            </Typography>
+          </Toolbar>
+        </AppBar>
+        <Container maxWidth="sm">
+          <Paper elevation={3} sx={{ p: 4, mt: 8, textAlign: 'center' }}>
+            <ErrorIcon sx={{ fontSize: 60, color: 'error.main', mb: 2 }} />
+            <Typography variant="h4" gutterBottom>
+              Exam Terminated
+            </Typography>
+            <Typography variant="h6" color="error" sx={{ mb: 2 }}>
+              Malpractice Detected
+            </Typography>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
+              Your exam has been terminated due to multiple violations detected during the session.
+              Total violations: {violationCount}
+            </Typography>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="body2" color="text.secondary">
+              Please contact your exam administrator for further instructions.
+            </Typography>
+          </Paper>
+        </Container>
+      </Box>
+    );
+  }
+
+  if (callEnded) {
+    return (
+      <Box sx={{ flexGrow: 1, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
+        <AppBar position="static" sx={{ mb: 3 }}>
+          <Toolbar>
+            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+              Exam Monitoring System
+            </Typography>
+          </Toolbar>
+        </AppBar>
+        <Container maxWidth="sm">
+          <Paper elevation={3} sx={{ p: 4, mt: 8, textAlign: 'center' }}>
+            <CallEndIcon sx={{ fontSize: 60, color: 'error.main', mb: 2 }} />
+            <Typography variant="h4" gutterBottom>
+              Exam Ended
+            </Typography>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
+              Your proctoring session has been terminated.
+            </Typography>
+          </Paper>
+        </Container>
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ flexGrow: 1, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
@@ -370,7 +457,7 @@ function App() {
                         disabled={!idToCall}
                         startIcon={<PhoneIcon />}
                       >
-                        Call
+                        Connect
                       </Button>
                     )}
                   </Stack>
@@ -491,7 +578,7 @@ function App() {
               </Button>
             }
           >
-            Incoming proctor call...
+            Incoming proctor connection...
           </Alert>
         </Snackbar>
       )}
